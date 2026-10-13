@@ -1,30 +1,25 @@
 import { BaseService } from "./BaseService";
 import { Network } from "./types";
-import { CLIError } from "../core/errors";
+import { normalizeKeys } from "../core/normalizeKeys";
 
 /**
  * Service for listing OpenStack Neutron networks.
  */
 export class NetworkService extends BaseService {
   /**
-   * Lists all networks visible to the active project.
-   * Results are cached for 5 minutes.
+   * Lists networks in all projects (Neutron returns every project's
+   * networks to admins). Keys like `router:external` are normalized.
    */
   async listNetworks(): Promise<Network[]> {
-    try {
-      return await this.fetchData<Network[]>(["network", "list"]);
-    } catch (error) {
-      if (error instanceof CLIError) {
-        this.handleCLIError(error, "Failed to list networks");
-      }
-      return [];
-    }
+    const networks = await this.client.listAll<unknown>("network", "/networks", "networks");
+    return normalizeKeys<Network[]>(networks);
   }
 
   /**
-   * Fetches detailed information for a single network.
+   * Fetches the raw network document for the detail view.
    */
-  async getNetwork(id: string): Promise<Network> {
-    return this.cli.run<Network>(["network", "show", id]);
+  async getNetwork(id: string): Promise<Record<string, unknown>> {
+    const body = await this.client.request<{ network: Record<string, unknown> }>("network", `/networks/${id}`);
+    return body.network;
   }
 }

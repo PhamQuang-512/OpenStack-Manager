@@ -1,276 +1,219 @@
-// Unit tests for ServerService, ClusterService, and BaseService stale cache fallback
+// Unit tests for the REST-backed resource services
 
-import { LocalStorage, showToast } from "@raycast/api";
-import { CLIExecutor } from "../core/CLIExecutor";
-import { ResourceCache } from "../core/ResourceCache";
-import { ConfigManager } from "../config/ConfigManager";
-import { ServerService } from "../services/ServerService";
-import { ClusterService } from "../services/ClusterService";
-import { BaseService } from "../services/BaseService";
-import { CLIError } from "../core/errors";
-import { Server, MagnumCluster } from "../services/types";
+import { OpenStackClient } from "../core/OpenStackClient";
+import { ApiError } from "../core/errors";
+import { ServerService, toServer } from "../services/ServerService";
+import { FlavorService } from "../services/FlavorService";
+import { NetworkService } from "../services/NetworkService";
+import { ProjectService } from "../services/ProjectService";
+import { LoadBalancerService } from "../services/LoadBalancerService";
 
-const mockShowToast = showToast as jest.MockedFunction<typeof showToast>;
-
-// Access the underlying Map for test cleanup
-const mockStorage = (LocalStorage as unknown as { __storage: Map<string, string> }).__storage;
-
-/**
- * Concrete subclass of BaseService for testing fetchData.
- */
-class TestService extends BaseService {
-  async fetchItems<T>(args: string[]): Promise<T> {
-    return this.fetchData<T>(args);
-  }
-}
-
-/**
- * Creates a mock CLIExecutor with controllable run/exec methods.
- */
-function createMockCLI(): jest.Mocked<CLIExecutor> {
+function createMockClient() {
   return {
-    run: jest.fn(),
-    exec: jest.fn(),
-  } as unknown as jest.Mocked<CLIExecutor>;
+    request: jest.fn(),
+    listAll: jest.fn(),
+  } as unknown as jest.Mocked<OpenStackClient>;
 }
 
-/**
- * Creates a mock ConfigManager (not used directly in these tests,
- * but required by the BaseService constructor).
- */
-function createMockConfigManager(): ConfigManager {
-  return {} as ConfigManager;
-}
+describe("ServerService", () => {
+  const novaServer = {
+    id: "srv-1",
+    name: "web-01",
+    status: "ACTIVE",
+    tenant_id: "proj-a",
+    flavor: { original_name: "m1.large" },
+    image: { id: "img-1" },
+    addresses: {
+      private: [{ addr: "10.0.0.5" }, { addr: "203.0.113.10" }],
+      backend: [{ addr: "10.1.0.7" }],
+    },
+    security_groups: [{ name: "default" }, { name: "web" }],
+    "OS-EXT-SRV-ATTR:host": "compute-01",
+    "OS-EXT-AZ:availability_zone": "az-1",
+  };
 
-// ─── ServerService ───────────────────────────────────────────────────────────
-
-describe("ServerService - Unit Tests", () => {
-  let cli: jest.Mocked<CLIExecutor>;
-  let cache: ResourceCache;
-  let service: ServerService;
-
-  const realisticServers: Server[] = [
-    {
-      id: "abc-123-def-456",
-      name: "web-server-01",
-      status: "ACTIVE",
+  it("maps Nova servers to the list model", () => {
+    expect(toServer(novaServer)).toMatchObject({
+      id: "srv-1",
       flavor: "m1.large",
-      image: "Ubuntu 22.04",
-      networks: "private=10.0.0.5; public=203.0.113.10",
-      security_groups: "default, web-sg",
+      image: "img-1",
+      networks: "private=10.0.0.5, 203.0.113.10; backend=10.1.0.7",
+      ips: ["10.0.0.5", "203.0.113.10", "10.1.0.7"],
+      project_id: "proj-a",
+      host: "compute-01",
+      security_groups: "default, web",
       availability_zone: "az-1",
-      key_name: "my-keypair",
-      created: "2024-01-15T10:30:00Z",
-      updated: "2024-01-15T12:00:00Z",
-    },
-    {
-      id: "ghi-789-jkl-012",
-      name: "db-server-01",
-      status: "SHUTOFF",
-      flavor: "m1.xlarge",
-      image: "CentOS 9",
-      networks: "private=10.0.0.10",
-      security_groups: "default, db-sg",
-      availability_zone: "az-2",
-      key_name: null,
-      created: "2024-02-01T08:00:00Z",
-      updated: "2024-02-10T14:30:00Z",
-    },
-  ];
-
-  beforeEach(() => {
-    mockShowToast.mockClear();
-    mockStorage.clear();
-    cli = createMockCLI();
-    cache = new ResourceCache();
-    service = new ServerService(cli, cache, createMockConfigManager());
+    });
   });
 
-  // Validates: Requirements 3.1
-  it("listServers returns parsed server data from CLI", async () => {
-    cli.run.mockResolvedValueOnce(realisticServers);
+  it("lists servers of all projects", async () => {
+    const client = createMockClient();
+    client.listAll.mockResolvedValueOnce([novaServer]);
 
-    const result = await service.listServers();
+    const servers = await new ServerService(client).listServers();
 
-    expect(result).toEqual(realisticServers);
-    expect(result).toHaveLength(2);
-    expect(result[0].name).toBe("web-server-01");
-    expect(result[0].status).toBe("ACTIVE");
-    expect(result[1].flavor).toBe("m1.xlarge");
-    expect(cli.run).toHaveBeenCalledWith(["server", "list"]);
+    expect(client.listAll).toHaveBeenCalledWith("compute", "/servers/detail?all_tenants=1", "servers");
+    expect(servers).toHaveLength(1);
   });
 
-  // Validates: Requirements 3.1
-  it("listServers returns empty array on CLI error", async () => {
-    cli.run.mockRejectedValueOnce(new CLIError("Connection refused", 1, "Connection refused", ["server", "list"]));
+  it("falls back to the current project when all_tenants is forbidden", async () => {
+    const client = createMockClient();
+    client.listAll
+      .mockRejectedValueOnce(new ApiError("forbidden", 403, "compute", "/servers/detail"))
+      .mockResolvedValueOnce([novaServer]);
 
-    const result = await service.listServers();
+    const servers = await new ServerService(client).listServers();
 
-    expect(result).toEqual([]);
-    expect(mockShowToast).toHaveBeenCalled();
+    expect(client.listAll).toHaveBeenLastCalledWith("compute", "/servers/detail", "servers");
+    expect(servers[0].id).toBe("srv-1");
   });
 
-  // Validates: Requirements 3.2
-  it("getServer returns detailed server data", async () => {
-    cli.run.mockResolvedValueOnce(realisticServers[0]);
+  it("propagates other errors instead of returning an empty list", async () => {
+    const client = createMockClient();
+    client.listAll.mockRejectedValueOnce(new ApiError("boom", 500, "compute", "/servers/detail"));
 
-    const result = await service.getServer("abc-123-def-456");
-
-    expect(result).toEqual(realisticServers[0]);
-    expect(cli.run).toHaveBeenCalledWith(["server", "show", "abc-123-def-456"]);
+    await expect(new ServerService(client).listServers()).rejects.toThrow("boom");
   });
 
-  // Validates: Requirements 3.3
-  it("startServer calls exec with correct args", async () => {
-    cli.exec.mockResolvedValueOnce(undefined);
+  it("sends power actions to the action endpoint", async () => {
+    const client = createMockClient();
+    client.request.mockResolvedValue(undefined);
+    const service = new ServerService(client);
 
-    await service.startServer("abc-123-def-456");
+    await service.startServer("srv-1");
+    await service.stopServer("srv-1");
+    await service.rebootServer("srv-1");
 
-    expect(cli.exec).toHaveBeenCalledWith(["server", "start", "abc-123-def-456"]);
-  });
-
-  // Validates: Requirements 3.4
-  it("stopServer calls exec with correct args", async () => {
-    cli.exec.mockResolvedValueOnce(undefined);
-
-    await service.stopServer("ghi-789-jkl-012");
-
-    expect(cli.exec).toHaveBeenCalledWith(["server", "stop", "ghi-789-jkl-012"]);
-  });
-
-  // Validates: Requirements 3.5
-  it("rebootServer calls exec with --soft flag", async () => {
-    cli.exec.mockResolvedValueOnce(undefined);
-
-    await service.rebootServer("abc-123-def-456");
-
-    expect(cli.exec).toHaveBeenCalledWith(["server", "reboot", "--soft", "abc-123-def-456"]);
-  });
-
-  // Validates: Requirements 3.7
-  it("startServer throws on failure", async () => {
-    cli.exec.mockRejectedValueOnce(new CLIError("Server locked", 1, "Server locked", []));
-
-    await expect(service.startServer("abc-123-def-456")).rejects.toThrow(CLIError);
-  });
-});
-
-// ─── ClusterService ──────────────────────────────────────────────────────────
-
-describe("ClusterService - Unit Tests", () => {
-  let cli: jest.Mocked<CLIExecutor>;
-  let cache: ResourceCache;
-  let service: ClusterService;
-
-  const realisticClusters: MagnumCluster[] = [
-    {
-      uuid: "cluster-001",
-      name: "k8s-prod",
-      status: "CREATE_COMPLETE",
-      status_reason: "Stack CREATE completed successfully",
-      cluster_template_id: "tmpl-abc",
-      master_count: 3,
-      node_count: 5,
-      keypair: "my-key",
-      api_address: "https://10.0.0.100:6443",
-      discovery_url: "https://discovery.example.com/abc",
-      created_at: "2024-01-10T09:00:00Z",
-      updated_at: "2024-01-10T09:30:00Z",
-      labels: { kube_tag: "v1.28.0" },
-      coe_version: "v1.28.0",
-    },
-  ];
-
-  beforeEach(() => {
-    mockShowToast.mockClear();
-    mockStorage.clear();
-    cli = createMockCLI();
-    cache = new ResourceCache();
-    service = new ClusterService(cli, cache, createMockConfigManager());
-  });
-
-  // Validates: Requirements 8.1
-  it("listClusters returns parsed cluster data from CLI", async () => {
-    cli.run.mockResolvedValueOnce(realisticClusters);
-
-    const result = await service.listClusters();
-
-    expect(result).toEqual(realisticClusters);
-    expect(result[0].name).toBe("k8s-prod");
-    expect(cli.run).toHaveBeenCalledWith(["coe", "cluster", "list"]);
-  });
-
-  // Validates: Requirements 8.6
-  describe("Magnum unavailable detection from stderr patterns", () => {
-    const unavailablePatterns = [
-      "endpoint not found",
-      "No endpoint for service",
-      "service not available",
-      "ERROR (CommandError): endpoint not found for container-infra",
-      "No endpoint for service type container-infra",
-    ];
-
-    it.each(unavailablePatterns)(
-      'returns empty array and shows informational Toast for stderr: "%s"',
-      async (stderrMessage) => {
-        cli.run.mockRejectedValueOnce(new CLIError(stderrMessage, 1, stderrMessage, ["coe", "cluster", "list"]));
-
-        const result = await service.listClusters();
-
-        expect(result).toEqual([]);
-        expect(mockShowToast).toHaveBeenCalledWith(
-          expect.objectContaining({
-            title: "Magnum not available",
-          }),
-        );
-      },
-    );
-
-    it("shows failure Toast for non-Magnum CLI errors", async () => {
-      cli.run.mockRejectedValueOnce(
-        new CLIError("Authentication failed", 1, "Authentication failed", ["coe", "cluster", "list"]),
-      );
-
-      const result = await service.listClusters();
-
-      expect(result).toEqual([]);
-      expect(mockShowToast).toHaveBeenCalledWith(
-        expect.objectContaining({
-          title: "Failed to list clusters",
-        }),
-      );
+    expect(client.request).toHaveBeenNthCalledWith(1, "compute", "/servers/srv-1/action", {
+      method: "POST",
+      body: { "os-start": null },
+    });
+    expect(client.request).toHaveBeenNthCalledWith(2, "compute", "/servers/srv-1/action", {
+      method: "POST",
+      body: { "os-stop": null },
+    });
+    expect(client.request).toHaveBeenNthCalledWith(3, "compute", "/servers/srv-1/action", {
+      method: "POST",
+      body: { reboot: { type: "SOFT" } },
     });
   });
 });
 
-// ─── BaseService fetchData ───────────────────────────────────────────────────
+describe("FlavorService", () => {
+  it("maps extension keys and sorts by vCPU count", async () => {
+    const client = createMockClient();
+    client.listAll.mockResolvedValueOnce([
+      { id: "f2", name: "large", vcpus: 8, ram: 16384, disk: 80, "os-flavor-access:is_public": false },
+      { id: "f1", name: "small", vcpus: 1, ram: 1024, disk: 10, "os-flavor-access:is_public": true },
+    ]);
 
-describe("BaseService - fetchData calls CLI directly", () => {
-  let cli: jest.Mocked<CLIExecutor>;
-  let cache: ResourceCache;
-  let service: TestService;
+    const flavors = await new FlavorService(client).listFlavors();
 
-  beforeEach(() => {
-    mockShowToast.mockClear();
-    mockStorage.clear();
-    cli = createMockCLI();
-    cache = new ResourceCache();
-    service = new TestService(cli, cache, createMockConfigManager());
+    expect(flavors.map((f) => f.id)).toEqual(["f1", "f2"]);
+    expect(flavors[1].is_public).toBe(false);
+  });
+});
+
+describe("NetworkService", () => {
+  it("normalizes provider and router keys", async () => {
+    const client = createMockClient();
+    client.listAll.mockResolvedValueOnce([
+      { id: "n1", name: "ext", "router:external": true, "provider:network_type": "vlan", project_id: "proj-a" },
+    ]);
+
+    const [network] = await new NetworkService(client).listNetworks();
+
+    expect(network).toMatchObject({ router_external: true, provider_network_type: "vlan", project_id: "proj-a" });
+  });
+});
+
+describe("ProjectService", () => {
+  it("falls back to /auth/projects when listing all projects is forbidden", async () => {
+    const client = createMockClient();
+    client.request
+      .mockRejectedValueOnce(new ApiError("forbidden", 403, "identity", "/projects"))
+      .mockResolvedValueOnce({ projects: [{ id: "p1", name: "mine" }] });
+
+    const projects = await new ProjectService(client).listProjects();
+
+    expect(client.request).toHaveBeenLastCalledWith("identity", "/auth/projects");
+    expect(projects).toEqual([{ id: "p1", name: "mine" }]);
+  });
+});
+
+describe("LoadBalancerService", () => {
+  it("attaches the floating IP of each VIP port", async () => {
+    const client = createMockClient();
+    client.listAll.mockImplementation(async (service: string) =>
+      service === "network"
+        ? [{ floating_ip_address: "198.51.100.5", port_id: "port-1" }]
+        : [
+            { id: "lb1", name: "a", vip_port_id: "port-1", provisioning_status: "ACTIVE", operating_status: "ONLINE" },
+            { id: "lb2", name: "b", vip_port_id: "port-2", provisioning_status: "ACTIVE", operating_status: "ONLINE" },
+          ],
+    );
+
+    const lbs = await new LoadBalancerService(client).listLoadBalancers();
+
+    expect(lbs.find((lb) => lb.id === "lb1")?.floating_ip).toBe("198.51.100.5");
+    expect(lbs.find((lb) => lb.id === "lb2")?.floating_ip).toBeUndefined();
   });
 
-  it("fetches from CLI and returns result", async () => {
-    const freshData = [{ id: "2", name: "fresh-server" }];
-    cli.run.mockResolvedValueOnce(freshData);
+  it("still lists load balancers when floating IPs cannot be fetched", async () => {
+    const client = createMockClient();
+    client.listAll.mockImplementation(async (service: string) => {
+      if (service === "network") throw new ApiError("down", 503, "network", "/floatingips");
+      return [{ id: "lb1", name: "a", provisioning_status: "ACTIVE", operating_status: "ONLINE" }];
+    });
 
-    const result = await service.fetchItems<typeof freshData>(["server", "list"]);
-
-    expect(result).toEqual(freshData);
-    expect(cli.run).toHaveBeenCalledWith(["server", "list"]);
+    await expect(new LoadBalancerService(client).listLoadBalancers()).resolves.toHaveLength(1);
   });
 
-  it("throws when CLI fails", async () => {
-    cli.run.mockRejectedValueOnce(new CLIError("Connection refused", 1, "Connection refused", ["server", "list"]));
+  it("assembles listeners, pools with members and health monitors, amphorae and stats", async () => {
+    const client = createMockClient();
+    client.request.mockImplementation(async (_service: string, path: string) => {
+      if (path === "/lbaas/loadbalancers/lb1") {
+        return {
+          loadbalancer: {
+            id: "lb1",
+            name: "web",
+            vip_port_id: "port-1",
+            provisioning_status: "ACTIVE",
+            operating_status: "ONLINE",
+          },
+        };
+      }
+      if (path === "/lbaas/loadbalancers/lb1/stats") {
+        return {
+          stats: { active_connections: 1, total_connections: 10, bytes_in: 5, bytes_out: 6, request_errors: 0 },
+        };
+      }
+      if (path === "/lbaas/healthmonitors/hm1") {
+        return { healthmonitor: { id: "hm1", type: "HTTP", delay: 5, timeout: 3, max_retries: 3 } };
+      }
+      throw new Error(`unexpected ${path}`);
+    });
+    client.listAll.mockImplementation(async (_service: string, path: string) => {
+      if (path.startsWith("/lbaas/listeners")) {
+        return [
+          { id: "l2", protocol: "HTTPS", protocol_port: 443 },
+          { id: "l1", protocol: "HTTP", protocol_port: 80 },
+        ];
+      }
+      if (path.startsWith("/lbaas/pools?")) return [{ id: "p1", healthmonitor_id: "hm1" }];
+      if (path === "/lbaas/pools/p1/members") return [{ id: "m1", address: "10.0.0.5", protocol_port: 8080 }];
+      if (path.startsWith("/octavia/amphorae")) throw new ApiError("forbidden", 403, "load-balancer", path);
+      if (path.startsWith("/floatingips")) return [{ floating_ip_address: "198.51.100.5", port_id: "port-1" }];
+      throw new Error(`unexpected ${path}`);
+    });
 
-    await expect(service.fetchItems(["server", "list"])).rejects.toThrow(CLIError);
+    const detail = await new LoadBalancerService(client).getLoadBalancerDetail("lb1");
+
+    expect(detail.loadBalancer.floating_ip).toBe("198.51.100.5");
+    expect(detail.listeners.map((l) => l.protocol_port)).toEqual([80, 443]);
+    expect(detail.pools[0].members).toHaveLength(1);
+    expect(detail.pools[0].healthMonitor?.type).toBe("HTTP");
+    expect(detail.amphorae).toBeNull();
+    expect(detail.stats?.total_connections).toBe(10);
   });
 });

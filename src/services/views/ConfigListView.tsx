@@ -2,6 +2,7 @@ import { Action, ActionPanel, Color, confirmAlert, Icon, List, showToast, Toast 
 import { useCallback, useEffect, useState } from "react";
 import { ConfigManager } from "../../config/ConfigManager";
 import { CloudConfig } from "../../config/types";
+import { tlsSettingsFor } from "../../core/httpTransport";
 import ConfigFormView from "./ConfigFormView";
 
 interface ConfigListViewProps {
@@ -94,6 +95,9 @@ export default function ConfigListView({ configManager }: ConfigListViewProps) {
             subtitle={config.auth.auth_url}
             accessories={[
               ...(isActive ? [{ tag: { value: "Active", color: Color.Green } }] : []),
+              ...(tlsSettingsFor(config).verify
+                ? []
+                : [{ tag: { value: "TLS verify off", color: Color.Orange }, tooltip: "insecure / verify: false" }]),
               { text: config.region_name },
             ]}
             actions={

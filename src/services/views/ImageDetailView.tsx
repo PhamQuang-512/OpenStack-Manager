@@ -1,30 +1,30 @@
 import GenericDetailView from "./GenericDetailView";
+import { cacheKey, CloudViewProps, getServices } from "../index";
 
-interface ImageDetailViewProps {
+interface ImageDetailViewProps extends CloudViewProps {
   imageId: string;
   imageName: string;
-  horizonUrl?: string;
-  binaryPath: string;
-  configName: string;
+  projectName?: string;
 }
 
 export default function ImageDetailView({
   imageId,
   imageName,
+  projectName,
   horizonUrl,
   binaryPath,
   configName,
 }: ImageDetailViewProps) {
+  const services = getServices(configName, binaryPath);
   return (
     <GenericDetailView
       resourceId={imageId}
       resourceName={imageName}
-      cliArgs={["image", "show"]}
-      cacheKeyPrefix="image-detail"
+      cacheKey={cacheKey("image-detail", configName, imageId)}
+      fetcher={() => services.images.getImage(imageId)}
       horizonUrl={horizonUrl}
       horizonResourceType="images"
-      binaryPath={binaryPath}
-      configName={configName}
+      projectName={projectName}
       summaryKeys={[
         { key: "container_format", label: "Container Format" },
         { key: "os_distro", label: "OS Distro" },

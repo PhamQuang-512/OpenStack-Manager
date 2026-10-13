@@ -3,7 +3,13 @@
 
 import fc from "fast-check";
 import { Color } from "@raycast/api";
-import { getServerStatusColor, getImageStatusColor, getClusterStatusColor } from "../utils/statusColors";
+import {
+  getServerStatusColor,
+  getImageStatusColor,
+  getClusterStatusColor,
+  getLBOperatingStatusColor,
+  getLBProvisioningStatusColor,
+} from "../utils/statusColors";
 
 /** All valid Color values that the mapping functions may return. */
 const VALID_COLORS = new Set<string>([
@@ -97,6 +103,26 @@ describe("Property 9: Status color mapping is total and consistent", () => {
       expect(getClusterStatusColor("UPDATE_IN_PROGRESS")).toBe(Color.Orange);
       expect(getClusterStatusColor("DELETE_IN_PROGRESS")).toBe(Color.Orange);
       expect(getClusterStatusColor("RANDOM_STATUS")).toBe(Color.SecondaryText);
+    });
+  });
+
+  describe("getLBOperatingStatusColor", () => {
+    it("maps known statuses to the correct colors", () => {
+      expect(getLBOperatingStatusColor("ONLINE")).toBe(Color.Green);
+      expect(getLBOperatingStatusColor("ERROR")).toBe(Color.Red);
+      expect(getLBOperatingStatusColor("OFFLINE")).toBe(Color.Red);
+      expect(getLBOperatingStatusColor("DEGRADED")).toBe(Color.Orange);
+      expect(getLBOperatingStatusColor("DRAINING")).toBe(Color.Orange);
+      expect(getLBOperatingStatusColor("NO_MONITOR")).toBe(Color.SecondaryText);
+    });
+  });
+
+  describe("getLBProvisioningStatusColor", () => {
+    it("maps known statuses to the correct colors", () => {
+      expect(getLBProvisioningStatusColor("ACTIVE")).toBe(Color.Green);
+      expect(getLBProvisioningStatusColor("ERROR")).toBe(Color.Red);
+      expect(getLBProvisioningStatusColor("PENDING_UPDATE")).toBe(Color.Orange);
+      expect(getLBProvisioningStatusColor("DELETED")).toBe(Color.SecondaryText);
     });
   });
 });

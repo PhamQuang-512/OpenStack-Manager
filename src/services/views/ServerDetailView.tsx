@@ -1,30 +1,30 @@
 import GenericDetailView from "./GenericDetailView";
+import { cacheKey, CloudViewProps, getServices } from "../index";
 
-interface ServerDetailViewProps {
+interface ServerDetailViewProps extends CloudViewProps {
   serverId: string;
   serverName: string;
-  horizonUrl?: string;
-  binaryPath: string;
-  configName: string;
+  projectName?: string;
 }
 
 export default function ServerDetailView({
   serverId,
   serverName,
+  projectName,
   horizonUrl,
   binaryPath,
   configName,
 }: ServerDetailViewProps) {
+  const services = getServices(configName, binaryPath);
   return (
     <GenericDetailView
       resourceId={serverId}
       resourceName={serverName}
-      cliArgs={["server", "show"]}
-      cacheKeyPrefix="server-detail"
+      cacheKey={cacheKey("server-detail", configName, serverId)}
+      fetcher={() => services.servers.getServer(serverId)}
       horizonUrl={horizonUrl}
       horizonResourceType="servers"
-      binaryPath={binaryPath}
-      configName={configName}
+      projectName={projectName}
     />
   );
 }

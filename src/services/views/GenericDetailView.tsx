@@ -1,20 +1,19 @@
-import { Action, ActionPanel, Clipboard, Detail, Icon, LocalStorage, open, showToast, Toast } from "@raycast/api";
-import { useCallback, useEffect, useState } from "react";
-import { execFile as execFileCb } from "child_process";
-import { promisify } from "util";
+import { Action, ActionPanel, Clipboard, Detail, Icon, open, showToast, Toast } from "@raycast/api";
+import { useFetchWithCache } from "../../core/useFetchWithCache";
 import { buildHorizonLink, HorizonResourceType } from "../../utils/horizonUrl";
-
-const execFile = promisify(execFileCb);
+import { escapeMarkdown } from "../../utils/markdown";
 
 export interface GenericDetailViewProps {
   resourceId: string;
   resourceName: string;
-  cliArgs: string[];
-  cacheKeyPrefix: string;
+  /** Cache key for this resource's detail document (see `cacheKey`). */
+  cacheKey: string;
+  /** Loads the raw resource document from the API. */
+  fetcher: () => Promise<Record<string, unknown>>;
   horizonUrl?: string;
   horizonResourceType?: HorizonResourceType;
-  binaryPath: string;
-  configName: string;
+  /** Owning project, shown in the summary. */
+  projectName?: string;
   /** Optional per-resource summary keys for the main markdown output. Falls back to server defaults. */
   summaryKeys?: { key: string; label: string; format?: string }[];
 }
@@ -154,67 +153,41 @@ function getAllIPs(addressGroups: { network: string; ips: string[] }[]): string 
 export default function GenericDetailView({
   resourceId,
   resourceName,
-  cliArgs,
-  cacheKeyPrefix,
+  cacheKey,
+  fetcher,
   horizonUrl,
   horizonResourceType,
-  binaryPath,
-  configName,
+  projectName,
   summaryKeys,
 }: GenericDetailViewProps) {
-  const [data, setData] = useState<Record<string, unknown> | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  const cacheKey = `detail:${cacheKeyPrefix}:${resourceId}`;
-
-  const fetchData = useCallback(async () => {
-    try {
-      const { stdout } = await execFile(binaryPath, ["--os-cloud", configName, ...cliArgs, resourceId, "-f", "json"], {
-        timeout: 30000,
-        maxBuffer: 10 * 1024 * 1024,
-      });
-      const parsed = JSON.parse(stdout) as Record<string, unknown>;
-      setData(parsed);
-      await LocalStorage.setItem(cacheKey, JSON.stringify(parsed));
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      await showToast({ style: Toast.Style.Failure, title: "Failed to load details", message });
-    } finally {
-      setIsLoading(false);
-    }
-  }, [binaryPath, configName, cliArgs, resourceId, cacheKey]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const cached = await LocalStorage.getItem<string>(cacheKey);
-        if (cached && !cancelled) {
-          setData(JSON.parse(cached) as Record<string, unknown>);
-        }
-      } catch {
-        // Ignore
-      }
-
-      if (!cancelled) {
-        await fetchData();
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [cacheKey, fetchData]);
+  const { data, isLoading, revalidate } = useFetchWithCache<Record<string, unknown>>(cacheKey, fetcher, {
+    errorTitle: "Failed to load details",
+  });
 
   const horizonLink =
     horizonResourceType && horizonUrl ? buildHorizonLink(horizonUrl, horizonResourceType, resourceId) : null;
 
   if (!data) {
     const markdown = isLoading
-      ? `# ${resourceName}\n\nLoading details...`
-      : `# ${resourceName}\n\nFailed to load details.`;
-    return <Detail isLoading={isLoading} navigationTitle={resourceName} markdown={markdown} />;
+      ? `# ${escapeMarkdown(resourceName)}\n\nLoading details...`
+      : `# ${escapeMarkdown(resourceName)}\n\nFailed to load details.`;
+    return (
+      <Detail
+        isLoading={isLoading}
+        navigationTitle={resourceName}
+        markdown={markdown}
+        actions={
+          <ActionPanel>
+            <Action
+              title="Refresh"
+              icon={Icon.ArrowClockwise}
+              shortcut={{ modifiers: ["cmd"], key: "r" }}
+              onAction={revalidate}
+            />
+          </ActionPanel>
+        }
+      />
+    );
   }
 
   const entries = Object.entries(data);
@@ -252,6 +225,10 @@ export default function GenericDetailView({
     "access_ipv6",
     "hostId",
     "host_id",
+    "links",
+    "self",
+    "file",
+    "schema",
   ]);
 
   const visibleEntries = entries.filter(([key, value]) => {
@@ -279,7 +256,7 @@ export default function GenericDetailView({
 
   const keysToShow = summaryKeys ?? DEFAULT_SERVER_KEYS;
 
-  const summaryLines: string[] = [];
+  const summaryLines: string[] = projectName ? [`**Project:** ${escapeMarkdown(projectName)}`] : [];
   const seenLabels = new Set<string>();
   for (const { key, label, format } of keysToShow) {
     if (seenLabels.has(label)) continue;
@@ -290,9 +267,9 @@ export default function GenericDetailView({
       if (format === "size_gib" && typeof val === "number") {
         display = `${(val / 1024 / 1024 / 1024).toFixed(2)} GiB`;
       } else if (format === "subnet_list" && Array.isArray(val)) {
-        display = `${val.length} subnet${val.length !== 1 ? "s" : ""}\n${val.map((s) => `  - ${s}`).join("\n")}`;
+        display = `${val.length} subnet${val.length !== 1 ? "s" : ""}\n${val.map((s) => `  - ${escapeMarkdown(String(s))}`).join("\n")}`;
       } else {
-        display = typeof val === "object" ? flattenObject(val) : String(val);
+        display = escapeMarkdown(typeof val === "object" ? flattenObject(val) : String(val));
       }
 
       summaryLines.push(`**${label}:** ${display}`);
@@ -302,7 +279,7 @@ export default function GenericDetailView({
 
   // Add IP addresses
   if (allIPs) {
-    summaryLines.push(`**IP Addresses:** ${allIPs}`);
+    summaryLines.push(`**IP Addresses:** ${escapeMarkdown(allIPs)}`);
   }
 
   // Add addresses section if present
@@ -310,11 +287,11 @@ export default function GenericDetailView({
   if (addressGroups.length > 0) {
     addressesMarkdown = "\n\n## Addresses\n\n";
     for (const group of addressGroups) {
-      addressesMarkdown += `**${group.network}:** ${group.ips.join(", ")}\n\n`;
+      addressesMarkdown += `**${escapeMarkdown(group.network)}:** ${escapeMarkdown(group.ips.join(", "))}\n\n`;
     }
   }
 
-  const markdown = `# ${name}\n\n${summaryLines.join("\n\n")}${addressesMarkdown}`;
+  const markdown = `# ${escapeMarkdown(name)}\n\n${summaryLines.join("\n\n")}${addressesMarkdown}`;
 
   return (
     <Detail
@@ -354,10 +331,7 @@ export default function GenericDetailView({
             title="Refresh"
             icon={Icon.ArrowClockwise}
             shortcut={{ modifiers: ["cmd"], key: "r" }}
-            onAction={async () => {
-              setIsLoading(true);
-              await fetchData();
-            }}
+            onAction={revalidate}
           />
           {horizonLink && (
             <Action

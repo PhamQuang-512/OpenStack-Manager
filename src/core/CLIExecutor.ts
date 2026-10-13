@@ -38,7 +38,7 @@ export class CLIExecutor {
       });
       stdout = result.stdout;
     } catch (error: unknown) {
-      this.handleExecError(error, fullArgs);
+      this.handleExecError(error, fullArgs, timeoutMs);
       // handleExecError always throws, but TypeScript doesn't know that
       throw error;
     }
@@ -46,7 +46,8 @@ export class CLIExecutor {
     try {
       return normalizeKeys<T>(JSON.parse(stdout));
     } catch {
-      throw new CLIError(`Failed to parse JSON output from openstack CLI: ${stdout}`, 0, stdout, fullArgs);
+      // stdout is not included: for `token issue` it contains a bearer token
+      throw new CLIError("Failed to parse JSON output from openstack CLI", 0, "", fullArgs);
     }
   }
 
@@ -64,14 +65,19 @@ export class CLIExecutor {
         maxBuffer: 10 * 1024 * 1024,
       });
     } catch (error: unknown) {
-      this.handleExecError(error, fullArgs);
+      this.handleExecError(error, fullArgs, timeoutMs);
     }
   }
 
-  private handleExecError(error: unknown, fullArgs: string[]): never {
+  private handleExecError(error: unknown, fullArgs: string[], timeoutMs: number): never {
     // ENOENT means the binary was not found on the system
     if (isExecError(error) && error.code === "ENOENT") {
       throw new BinaryNotFoundError(this.binaryPath);
+    }
+
+    // execFile kills the child with SIGTERM when the timeout elapses
+    if (isExecError(error) && error.killed) {
+      throw new CLIError(`openstack CLI timed out after ${timeoutMs / 1000}s`, null, error.stderr || "", fullArgs);
     }
 
     // Non-zero exit code or other execFile errors

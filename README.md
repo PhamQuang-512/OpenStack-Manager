@@ -4,24 +4,28 @@
 
 # OpenStack Manager
 
-A Raycast extension for browsing and managing OpenStack cloud resources. Access servers, flavors, images, networks, security groups, and Kubernetes clusters across multiple cloud configurations — all from Raycast.
+A Raycast extension for browsing and managing OpenStack cloud resources. Access servers, load balancers, flavors, images, networks, security groups, and Kubernetes clusters across all projects and multiple cloud configurations — all from Raycast.
 
 ## Features
 
 - **Multi-Cloud Support**: Manage multiple OpenStack clouds from a single interface
-- **Resource Browsing**: Browse servers, flavors, images, networks, security groups, and Magnum clusters
-- **Server Actions**: Start, stop, and reboot servers directly from Raycast
+- **All Projects**: Every list shows resources from all projects (admin credentials), with the owning project name and a project filter dropdown
+- **Resource Browsing**: Browse servers, load balancers, flavors, images, networks, security groups, and Magnum clusters
+- **Load Balancers (Octavia)**: VIP and floating IP, listeners, pools, members (resolved to server names), health monitors, amphorae and statistics
+- **Server Actions**: Start, stop, and reboot servers directly from Raycast (stop/reboot ask for confirmation)
+- **Fast Loading**: Direct REST calls with a reused Keystone token; all lists are prefetched in parallel when a cloud is opened
 - **Persistent Caching**: Resources load instantly on subsequent opens with background refresh
-- **Detail Views**: Full resource details fetched via `openstack show` commands with all fields displayed
+- **Detail Views**: Full resource details with all fields displayed
 - **Security Group Rules**: View firewall rules for each security group
 - **Horizon Integration**: Open any resource in your Horizon dashboard with one shortcut
 - **Copy IPs**: Copy all IP addresses from a server with `Cmd+Shift+I`
-- **Search & Filter**: Real-time search filtering across all resource lists
+- **Search & Filter**: Search by name, ID, IP address, host or project name
 
 ## Prerequisites
 
-- [OpenStack CLI](https://docs.openstack.org/python-openstackclient/latest/) (`python-openstackclient`) installed
 - At least one cloud configured in `~/.config/openstack/clouds.yaml`
+- [OpenStack CLI](https://docs.openstack.org/python-openstackclient/latest/) (`python-openstackclient`) — only required for clouds that do not use application credentials (see [How It Works](#how-it-works))
+- Admin role to see resources of all projects; non-admin credentials see their own project only
 
 Install the CLI:
 
@@ -68,9 +72,9 @@ clouds:
 The main entry point. Flow:
 
 1. **Select a cloud config** from your `clouds.yaml`
-2. **Pick a service** (Servers, Flavors, Images, Networks, Security Groups, Kubernetes Clusters)
-3. **Browse resources** with search filtering
-4. **View details** with full metadata from `openstack show`
+2. **Pick a service** (Servers, Load Balancers, Networks, Security Groups, Kubernetes Clusters, Flavors, Images)
+3. **Browse resources** across all projects, filter by project with the dropdown, search by name / ID / IP
+4. **View details** with full metadata
 
 ### Manage Configs
 
@@ -82,15 +86,36 @@ Add, edit, and remove cloud configurations. Configs are stored in the standard `
 |----------|--------|
 | `Enter` | View details / Browse |
 | `Cmd+Shift+C` | Copy resource ID |
-| `Cmd+Shift+I` | Copy all IP addresses (servers) |
+| `Cmd+Shift+I` | Copy all IP addresses (servers) / VIP and floating IP (load balancers) |
+| `Cmd+Shift+M` | Copy member addresses (load balancer detail) |
 | `Cmd+R` | Refresh / Reload from CLI |
 | `Cmd+O` | Open in Horizon dashboard |
 
 ## How It Works
 
-The extension wraps the `openstack` CLI binary. All resource operations are executed via `openstack --os-cloud <config> <command> -f json` and the JSON output is displayed in Raycast. No direct API calls are made — the CLI handles authentication, token management, and endpoint discovery.
+The extension talks to the OpenStack REST APIs (Keystone, Nova, Neutron, Glance, Octavia, Magnum) directly:
 
-Resource lists are cached in Raycast's LocalStorage for instant loading on subsequent opens. A background refresh fetches fresh data automatically. Detail views are also cached per resource ID.
+- **Application credentials** (`auth_type: v3applicationcredential` with id and secret in `clouds.yaml`): the extension authenticates against Keystone itself.
+- **Any other auth type** (password, websso, secrets in `secure.yaml`, ...): the extension runs `openstack token issue` and `openstack catalog list` once, then uses that token for REST calls.
+
+The token and service catalog are kept in memory only (never written to disk) and reused for every request while the command is open. Endpoints are resolved from the catalog using the cloud's `region_name` and `interface`.
+
+Resource lists are cached in Raycast's LocalStorage for instant loading on subsequent opens, and refreshed in the background. A failed refresh keeps showing the cached data. Detail views are cached per resource ID.
+
+### TLS / private CA
+
+Raycast runs extensions on its own Node.js, which only trusts the public (Mozilla) CA bundle — not certificates installed in the macOS Keychain. TLS options in `clouds.yaml` are honoured with the same meaning as in the `openstack` CLI:
+
+```yaml
+clouds:
+  my-cloud:
+    # Preferred for endpoints signed by a private/corporate CA:
+    cacert: ~/.config/openstack/my-ca.pem
+    # Test environments only — disables certificate verification:
+    # verify: false        (or: insecure: true)
+```
+
+To export a CA from the macOS System keychain: `security find-certificate -a -c "<CA name>" -p /Library/Keychains/System.keychain > ~/.config/openstack/my-ca.pem`. Both options can also be set from **Manage Configs**; clouds with verification disabled are marked "TLS verify off".
 
 ## Feedback & Issues
 

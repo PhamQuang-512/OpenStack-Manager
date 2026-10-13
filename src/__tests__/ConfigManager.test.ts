@@ -357,6 +357,29 @@ describe("ConfigManager - Unit Tests", () => {
     });
   });
 
+  describe("file permissions", () => {
+    it("writes clouds.yaml as owner-only (0600), including pre-existing files", async () => {
+      const yamlPath = path.join(tmpDir, "clouds.yaml");
+      await fs.writeFile(yamlPath, "clouds: {}\n", { encoding: "utf-8", mode: 0o644 });
+
+      await manager.addOrUpdateConfig({
+        name: "perm-test",
+        auth_type: "v3applicationcredential",
+        auth: {
+          auth_url: "https://keystone.example.com:5000/v3",
+          application_credential_id: "fake-id",
+          application_credential_secret: "fake-secret",
+        },
+        region_name: "RegionOne",
+        interface: "public",
+        identity_api_version: 3,
+      });
+
+      const stat = await fs.stat(yamlPath);
+      expect(stat.mode & 0o777).toBe(0o600);
+    });
+  });
+
   // Validates: Requirements 1.2
   describe("reading an empty clouds.yaml", () => {
     it("returns an empty list when clouds.yaml is empty", async () => {

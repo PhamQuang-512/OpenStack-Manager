@@ -1,30 +1,22 @@
 import { BaseService } from "./BaseService";
 import { Image } from "./types";
-import { CLIError } from "../core/errors";
 
 /**
  * Service for listing OpenStack Glance images.
  */
 export class ImageService extends BaseService {
   /**
-   * Lists all images visible to the active project.
-   * Results are cached for 5 minutes.
+   * Lists all images visible to the credential (all projects for admin).
+   * Glance pages at 25 by default, so request the maximum page size.
    */
   async listImages(): Promise<Image[]> {
-    try {
-      return await this.fetchData<Image[]>(["image", "list"]);
-    } catch (error) {
-      if (error instanceof CLIError) {
-        this.handleCLIError(error, "Failed to list images");
-      }
-      return [];
-    }
+    return this.client.listAll<Image>("image", "/images?limit=1000", "images");
   }
 
   /**
-   * Fetches detailed information for a single image.
+   * Fetches the raw image document for the detail view.
    */
-  async getImage(id: string): Promise<Image> {
-    return this.cli.run<Image>(["image", "show", id]);
+  async getImage(id: string): Promise<Record<string, unknown>> {
+    return this.client.request<Record<string, unknown>>("image", `/images/${id}`);
   }
 }

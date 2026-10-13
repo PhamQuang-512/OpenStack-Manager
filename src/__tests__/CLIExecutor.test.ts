@@ -175,7 +175,8 @@ describe("CLIExecutor - Unit Tests", () => {
       } catch (e) {
         expect(e).toBeInstanceOf(CLIError);
         expect((e as CLIError).message).toContain("Failed to parse JSON output");
-        expect((e as CLIError).message).toContain("not json at all");
+        // stdout may hold a bearer token (`token issue`), so it must not leak into the message
+        expect((e as CLIError).message).not.toContain("not json at all");
       }
     });
 

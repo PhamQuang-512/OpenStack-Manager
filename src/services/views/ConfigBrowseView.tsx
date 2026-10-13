@@ -2,16 +2,16 @@ import { Action, ActionPanel, Color, Icon, List, showToast, Toast } from "@rayca
 import { useCallback, useEffect, useState } from "react";
 import { ConfigManager } from "../../config/ConfigManager";
 import { CloudConfig } from "../../config/types";
-import { ResourceCache } from "../../core/ResourceCache";
+import { tlsSettingsFor } from "../../core/httpTransport";
+import { clearLegacyCache } from "../index";
 import ServiceListView from "./ServiceListView";
 
 interface ConfigBrowseViewProps {
   configManager: ConfigManager;
-  cache: ResourceCache;
   binaryPath: string;
 }
 
-export default function ConfigBrowseView({ configManager, cache, binaryPath }: ConfigBrowseViewProps) {
+export default function ConfigBrowseView({ configManager, binaryPath }: ConfigBrowseViewProps) {
   const [configs, setConfigs] = useState<CloudConfig[]>([]);
   const [activeConfigName, setActiveConfigName] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -38,6 +38,7 @@ export default function ConfigBrowseView({ configManager, cache, binaryPath }: C
 
   useEffect(() => {
     loadConfigs();
+    clearLegacyCache();
   }, [loadConfigs]);
 
   const handleSetActive = useCallback(
@@ -72,20 +73,19 @@ export default function ConfigBrowseView({ configManager, cache, binaryPath }: C
             icon={isActive ? { source: Icon.Star, tintColor: Color.Yellow } : Icon.Cloud}
             title={config.name}
             subtitle={config.auth.auth_url}
-            accessories={[{ text: config.region_name }]}
+            accessories={[
+              ...(tlsSettingsFor(config).verify
+                ? []
+                : [{ tag: { value: "TLS verify off", color: Color.Orange }, tooltip: "insecure / verify: false" }]),
+              { text: config.region_name },
+            ]}
             actions={
               <ActionPanel>
                 <Action.Push
                   title="Browse Services"
                   icon={Icon.List}
                   target={
-                    <ServiceListView
-                      configName={config.name}
-                      horizonUrl={config.horizon_url}
-                      binaryPath={binaryPath}
-                      cache={cache}
-                      configManager={configManager}
-                    />
+                    <ServiceListView configName={config.name} horizonUrl={config.horizon_url} binaryPath={binaryPath} />
                   }
                 />
                 <Action
