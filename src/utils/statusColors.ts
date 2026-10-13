@@ -79,3 +79,43 @@ export function getClusterStatusColor(status: string): string {
       return Color.SecondaryText;
   }
 }
+
+/**
+ * Returns a color for an Octavia operating status
+ * (load balancers, listeners, pools, members).
+ *
+ * - Green: ONLINE
+ * - Red: ERROR, OFFLINE
+ * - Orange: DEGRADED, DRAINING
+ * - Gray: anything else (NO_MONITOR, DISABLED, ...)
+ */
+export function getLBOperatingStatusColor(status: string): string {
+  switch (status.toUpperCase()) {
+    case "ONLINE":
+      return Color.Green;
+    case "ERROR":
+    case "OFFLINE":
+      return Color.Red;
+    case "DEGRADED":
+    case "DRAINING":
+      return Color.Orange;
+    default:
+      return Color.SecondaryText;
+  }
+}
+
+/**
+ * Returns a color for an Octavia provisioning status.
+ *
+ * - Green: ACTIVE
+ * - Red: ERROR
+ * - Orange: PENDING_CREATE, PENDING_UPDATE, PENDING_DELETE
+ * - Gray: anything else
+ */
+export function getLBProvisioningStatusColor(status: string): string {
+  const upper = status.toUpperCase();
+  if (upper === "ACTIVE") return Color.Green;
+  if (upper === "ERROR") return Color.Red;
+  if (upper.startsWith("PENDING_")) return Color.Orange;
+  return Color.SecondaryText;
+}

@@ -2,6 +2,10 @@ import { Action, ActionPanel, Form, showToast, Toast, useNavigation } from "@ray
 import { useState } from "react";
 import { ConfigManager } from "../../config/ConfigManager";
 import { CloudConfig } from "../../config/types";
+import { tlsSettingsFor } from "../../core/httpTransport";
+
+/** Top-level clouds.yaml keys written from form fields; everything else is preserved on edit. */
+const FORM_MANAGED_KEYS = new Set(["name", "verify", "insecure", "cacert", "horizon_url"]);
 
 interface ConfigFormViewProps {
   configManager: ConfigManager;
@@ -35,6 +39,8 @@ export default function ConfigFormView({ configManager, editConfig, onSaved }: C
     application_credential_secret: string;
     region_name: string;
     horizon_url: string;
+    verify_tls: boolean;
+    cacert: string;
   }) {
     const nameValid = validateRequired(values.name, setNameError);
     const authUrlValid = validateRequired(values.auth_url, setAuthUrlError);
@@ -46,18 +52,27 @@ export default function ConfigFormView({ configManager, editConfig, onSaved }: C
       return;
     }
 
+    // Keep keys this form does not manage (interface, project ids, ...) when editing
+    const preserved = Object.fromEntries(
+      Object.entries(editConfig ?? {}).filter(([key]) => !FORM_MANAGED_KEYS.has(key)),
+    ) as Partial<CloudConfig>;
+
     const config: CloudConfig = {
+      ...preserved,
       name: values.name.trim(),
       auth_type: "v3applicationcredential",
       auth: {
+        ...editConfig?.auth,
         auth_url: values.auth_url.trim(),
         application_credential_id: values.application_credential_id.trim(),
         application_credential_secret: values.application_credential_secret.trim(),
       },
       region_name: values.region_name.trim(),
-      interface: "public",
+      interface: editConfig?.interface ?? "public",
       identity_api_version: 3,
       ...(values.horizon_url.trim() ? { horizon_url: values.horizon_url.trim() } : {}),
+      ...(values.verify_tls ? {} : { verify: false }),
+      ...(values.verify_tls && values.cacert.trim() ? { cacert: values.cacert.trim() } : {}),
     };
 
     try {
@@ -132,6 +147,21 @@ export default function ConfigFormView({ configManager, editConfig, onSaved }: C
         title="Horizon URL (optional)"
         placeholder="https://horizon.example.com"
         defaultValue={editConfig?.horizon_url ?? ""}
+      />
+      <Form.Separator />
+      <Form.Checkbox
+        id="verify_tls"
+        title="TLS"
+        label="Verify server certificate"
+        info="Unchecking writes 'verify: false' (same as 'insecure: true'). Only use this for test environments."
+        defaultValue={tlsSettingsFor(editConfig).verify}
+      />
+      <Form.TextField
+        id="cacert"
+        title="CA Certificate (optional)"
+        placeholder="~/.config/openstack/ca.pem"
+        info="CA bundle for endpoints signed by a private CA (clouds.yaml 'cacert')."
+        defaultValue={editConfig?.cacert ?? ""}
       />
     </Form>
   );

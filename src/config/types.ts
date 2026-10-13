@@ -28,6 +28,10 @@ export interface CloudConfig {
   interface: "public" | "internal" | "admin";
   identity_api_version: 3;
   horizon_url?: string;
+  /** TLS options, same semantics as openstacksdk / the openstack CLI. */
+  verify?: boolean | string;
+  insecure?: boolean | string;
+  cacert?: string;
 }
 
 /**

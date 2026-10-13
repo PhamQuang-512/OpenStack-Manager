@@ -1,61 +1,37 @@
 import { Action, ActionPanel, Icon, List } from "@raycast/api";
-import { ConfigManager } from "../../config/ConfigManager";
-import { ResourceCache } from "../../core/ResourceCache";
+import { ReactElement, useEffect } from "react";
+import { CloudViewProps, prefetchAll } from "../index";
 import ServersView from "./ServersView";
 import FlavorsView from "./FlavorsView";
 import ImagesView from "./ImagesView";
 import NetworksView from "./NetworksView";
 import SecurityGroupsView from "./SecurityGroupsView";
 import ClustersView from "./ClustersView";
-
-interface ServiceListViewProps {
-  configName: string;
-  horizonUrl?: string;
-  binaryPath: string;
-  cache: ResourceCache;
-  configManager: ConfigManager;
-}
+import LoadBalancersView from "./LoadBalancersView";
 
 interface ServiceEntry {
   name: string;
   icon: Icon;
+  render: (props: CloudViewProps) => ReactElement;
 }
 
 const SERVICES: ServiceEntry[] = [
-  { name: "Servers", icon: Icon.Desktop },
-  { name: "Flavors", icon: Icon.MemoryChip },
-  { name: "Images", icon: Icon.Document },
-  { name: "Networks", icon: Icon.Network },
-  { name: "Security Groups", icon: Icon.Shield },
-  { name: "Kubernetes Clusters", icon: Icon.ComputerChip },
+  { name: "Servers", icon: Icon.Desktop, render: (props) => <ServersView {...props} /> },
+  { name: "Load Balancers", icon: Icon.Switch, render: (props) => <LoadBalancersView {...props} /> },
+  { name: "Networks", icon: Icon.Network, render: (props) => <NetworksView {...props} /> },
+  { name: "Security Groups", icon: Icon.Shield, render: (props) => <SecurityGroupsView {...props} /> },
+  { name: "Kubernetes Clusters", icon: Icon.ComputerChip, render: (props) => <ClustersView {...props} /> },
+  { name: "Flavors", icon: Icon.MemoryChip, render: (props) => <FlavorsView {...props} /> },
+  { name: "Images", icon: Icon.Document, render: (props) => <ImagesView {...props} /> },
 ];
 
-export default function ServiceListView({
-  configName,
-  horizonUrl,
-  binaryPath,
-  cache,
-  configManager,
-}: ServiceListViewProps) {
-  function getTargetView(serviceName: string) {
-    const props = { configName, horizonUrl, binaryPath, cache, configManager };
-    switch (serviceName) {
-      case "Servers":
-        return <ServersView {...props} />;
-      case "Flavors":
-        return <FlavorsView {...props} />;
-      case "Images":
-        return <ImagesView {...props} />;
-      case "Networks":
-        return <NetworksView {...props} />;
-      case "Security Groups":
-        return <SecurityGroupsView {...props} />;
-      case "Kubernetes Clusters":
-        return <ClustersView {...props} />;
-      default:
-        return <ServersView {...props} />;
-    }
-  }
+export default function ServiceListView(props: CloudViewProps) {
+  const { configName, binaryPath } = props;
+
+  // Warm every list while the user picks a service
+  useEffect(() => {
+    prefetchAll(configName, binaryPath);
+  }, [configName, binaryPath]);
 
   return (
     <List searchBarPlaceholder="Search services..." navigationTitle={`Services — ${configName}`}>
@@ -64,9 +40,10 @@ export default function ServiceListView({
           key={service.name}
           icon={service.icon}
           title={service.name}
+          subtitle="All projects"
           actions={
             <ActionPanel>
-              <Action.Push title="Browse" icon={Icon.List} target={getTargetView(service.name)} />
+              <Action.Push title="Browse" icon={Icon.List} target={service.render(props)} />
             </ActionPanel>
           }
         />

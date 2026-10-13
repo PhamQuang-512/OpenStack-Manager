@@ -1,83 +1,60 @@
 import { Action, ActionPanel, Clipboard, Icon, List, open, showToast, Toast } from "@raycast/api";
-import { useCallback, useMemo, useState } from "react";
-import { CLIExecutor } from "../../core/CLIExecutor";
-import { ResourceCache } from "../../core/ResourceCache";
 import { useFetchWithCache } from "../../core/useFetchWithCache";
-import { ClusterService } from "../ClusterService";
+import { ServiceUnavailableError } from "../../core/errors";
+import { cacheKey, CloudViewProps, getServices } from "../index";
 import { MagnumCluster } from "../types";
-import { ConfigManager } from "../../config/ConfigManager";
 import { getClusterStatusColor } from "../../utils/statusColors";
-import { filterByName } from "../../utils/searchFilter";
 import { buildHorizonLink } from "../../utils/horizonUrl";
 import ClusterDetailView from "./ClusterDetailView";
+import { projectAccessory, useProjectFilter } from "./projectFilter";
 
-interface ClustersViewProps {
-  configName: string;
-  horizonUrl?: string;
-  binaryPath: string;
-  cache: ResourceCache;
-  configManager: ConfigManager;
-}
-
-export default function ClustersView({ configName, horizonUrl, binaryPath, cache, configManager }: ClustersViewProps) {
-  const [searchText, setSearchText] = useState("");
-  const [magnumUnavailable, setMagnumUnavailable] = useState(false);
-
-  const cli = useMemo(() => new CLIExecutor(binaryPath, configName), [binaryPath, configName]);
-  const clusterService = useMemo(() => new ClusterService(cli, cache, configManager), [cli, cache, configManager]);
-
-  const fetchClusters = useCallback(async () => {
-    setMagnumUnavailable(false);
-    try {
-      return await clusterService.listClusters();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.toLowerCase().includes("not available") || message.toLowerCase().includes("endpoint not found")) {
-        setMagnumUnavailable(true);
-      }
-      throw error;
-    }
-  }, [clusterService]);
-
+export default function ClustersView({ configName, horizonUrl, binaryPath }: CloudViewProps) {
+  const services = getServices(configName, binaryPath);
   const {
     data: clusters,
+    error,
     isLoading,
     revalidate,
-  } = useFetchWithCache<MagnumCluster[]>(`clusters:${configName}`, fetchClusters);
+  } = useFetchWithCache<MagnumCluster[]>(cacheKey("clusters", configName), () => services.clusters.listClusters(), {
+    errorTitle: "Failed to list clusters",
+  });
 
-  const filtered = filterByName(clusters ?? [], searchText);
+  const { filtered, dropdown, projectName } = useProjectFilter(configName, binaryPath, clusters, (c) => c.project_id);
 
   return (
     <List
       isLoading={isLoading}
-      searchBarPlaceholder="Search clusters by name..."
-      onSearchTextChange={setSearchText}
+      searchBarPlaceholder="Search clusters by name, ID, API address or project..."
+      searchBarAccessory={dropdown}
       navigationTitle={`Kubernetes Clusters — ${configName}`}
     >
-      {magnumUnavailable ? (
+      {error instanceof ServiceUnavailableError ? (
         <List.EmptyView
           icon={Icon.ExclamationMark}
           title="Magnum Not Available"
           description="The Kubernetes (Magnum) service is not available in this region."
         />
-      ) : !isLoading && (clusters ?? []).length === 0 ? (
+      ) : !isLoading && filtered.length === 0 ? (
         <List.EmptyView
           icon={Icon.ComputerChip}
           title="No Clusters Found"
-          description="No Kubernetes clusters in this project."
+          description="No Kubernetes clusters in the selected projects."
         />
       ) : null}
       {filtered.map((cluster) => {
         const horizonLink = buildHorizonLink(horizonUrl, "clusters", cluster.uuid);
+        const project = projectName(cluster.project_id);
         return (
           <List.Item
             key={cluster.uuid}
             icon={Icon.ComputerChip}
             title={cluster.name}
-            subtitle={cluster.coe_version ?? ""}
+            subtitle={cluster.coe_version ?? cluster.health_status ?? ""}
+            keywords={[cluster.uuid, cluster.api_address ?? "", project].filter(Boolean)}
             accessories={[
-              { tag: { value: cluster.status ?? "UNKNOWN", color: getClusterStatusColor(cluster.status ?? "") } },
+              ...projectAccessory(project),
               { text: `M:${cluster.master_count ?? 0} N:${cluster.node_count ?? 0}` },
+              { tag: { value: cluster.status ?? "UNKNOWN", color: getClusterStatusColor(cluster.status ?? "") } },
             ]}
             actions={
               <ActionPanel>
@@ -88,6 +65,7 @@ export default function ClustersView({ configName, horizonUrl, binaryPath, cache
                     <ClusterDetailView
                       clusterId={cluster.uuid}
                       clusterName={cluster.name}
+                      projectName={project}
                       horizonUrl={horizonUrl}
                       binaryPath={binaryPath}
                       configName={configName}

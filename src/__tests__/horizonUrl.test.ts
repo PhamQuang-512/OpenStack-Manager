@@ -12,6 +12,7 @@ const RESOURCE_PATH_MAP: Record<HorizonResourceType, string> = {
   networks: "network/networks/detail",
   security_groups: "network/security-group/detail",
   clusters: "container-infra/clusters/detail",
+  load_balancers: "network/load-balancers/detail",
 };
 
 describe("Property 8: Horizon deep-link construction", () => {
@@ -57,5 +58,6 @@ describe("Property 8: Horizon deep-link construction", () => {
     expect(buildHorizonLink(base, "networks", "id-4")).toBe(`${base}/network/networks/detail/id-4`);
     expect(buildHorizonLink(base, "security_groups", "id-5")).toBe(`${base}/network/security-group/detail/id-5`);
     expect(buildHorizonLink(base, "clusters", "id-6")).toBe(`${base}/container-infra/clusters/detail/id-6`);
+    expect(buildHorizonLink(base, "load_balancers", "id-7")).toBe(`${base}/network/load-balancers/detail/id-7`);
   });
 });

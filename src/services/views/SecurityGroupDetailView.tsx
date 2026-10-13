@@ -1,18 +1,18 @@
-import { Action, ActionPanel, Clipboard, Detail, Icon, LocalStorage, open, showToast, Toast } from "@raycast/api";
-import { useCallback, useEffect, useState } from "react";
-import { execFile as execFileCb } from "child_process";
-import { promisify } from "util";
+import { Action, ActionPanel, Clipboard, Detail, Icon, open, showToast, Toast } from "@raycast/api";
+import { peekShared, useFetchWithCache } from "../../core/useFetchWithCache";
 import { buildHorizonLink } from "../../utils/horizonUrl";
+import { escapeMarkdown } from "../../utils/markdown";
+import { cacheKey, CloudViewProps, getServices } from "../index";
+import { SecurityGroup, SecurityGroupRule } from "../types";
 
-const execFile = promisify(execFileCb);
-
-interface SecurityGroupDetailViewProps {
+interface SecurityGroupDetailViewProps extends CloudViewProps {
   securityGroupId: string;
   securityGroupName: string;
-  horizonUrl?: string;
-  binaryPath: string;
-  configName: string;
+  projectName?: string;
 }
+
+/** Keys rendered elsewhere (rules table) or not useful in metadata. */
+const HIDDEN_KEYS = new Set(["security_group_rules", "tenant_id", "revision_number", "tags"]);
 
 function formatValue(value: unknown): string {
   if (value === null || value === undefined) return "—";
@@ -28,41 +28,40 @@ function formatValue(value: unknown): string {
 }
 
 function formatKey(key: string): string {
-  return key
-    .replace(/^os-ext-[a-z]+:/i, "")
-    .replace(/^os-[a-z]+-[a-z]+:/i, "")
-    .replace(/_/g, " ")
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-interface RuleRecord {
-  [key: string]: unknown;
+function formatPortRange(rule: SecurityGroupRule): string {
+  const { port_range_min: min, port_range_max: max } = rule;
+  if (min == null && max == null) return "All";
+  if (min === max || max == null) return String(min);
+  return `${min}-${max}`;
 }
 
-function buildRulesTable(rules: RuleRecord[]): string {
+/**
+ * Renders rules sorted ingress-first. Remote security groups are shown by
+ * name when the security group list is already loaded.
+ */
+function buildRulesTable(rules: SecurityGroupRule[], groupNames: Map<string, string>): string {
   if (rules.length === 0) return "No rules defined.";
 
+  const sorted = [...rules].sort(
+    (a, b) =>
+      b.direction.localeCompare(a.direction) ||
+      a.ethertype.localeCompare(b.ethertype) ||
+      (a.port_range_min ?? 0) - (b.port_range_min ?? 0),
+  );
+
   return (
-    `| Direction | Protocol | Port Range | Ethertype | Remote |\n|-----------|----------|------------|-----------|--------|\n` +
-    rules
+    `| Direction | Protocol | Port Range | Ethertype | Remote | Description |\n` +
+    `|-----------|----------|------------|-----------|--------|-------------|\n` +
+    sorted
       .map((rule) => {
-        const direction = String(rule["Direction"] ?? rule["direction"] ?? "—");
-        const protocol = String(rule["IP Protocol"] ?? rule["protocol"] ?? rule["ip_protocol"] ?? "Any");
-        const portMin = rule["Port Range Min"] ?? rule["port_range_min"];
-        const portMax = rule["Port Range Max"] ?? rule["port_range_max"];
-        let portRange = "All";
-        if (portMin != null && portMax != null) {
-          portRange = portMin === portMax ? String(portMin) : `${portMin}-${portMax}`;
-        }
-        const ethertype = String(rule["Ether Type"] ?? rule["ethertype"] ?? "—");
-        const remote = String(
-          rule["IP Range"] ??
-            rule["remote_ip_prefix"] ??
-            rule["Remote Security Group"] ??
-            rule["remote_group_id"] ??
-            "Any",
-        );
-        return `| ${direction} | ${protocol} | ${portRange} | ${ethertype} | ${remote} |`;
+        const remote = rule.remote_group_id
+          ? `SG: ${escapeMarkdown(groupNames.get(rule.remote_group_id) ?? rule.remote_group_id)}`
+          : (rule.remote_ip_prefix ?? "Any");
+        const description = escapeMarkdown(rule.description ?? "");
+        return `| ${rule.direction} | ${rule.protocol ?? "Any"} | ${formatPortRange(rule)} | ${rule.ethertype} | ${remote} | ${description} |`;
       })
       .join("\n")
   );
@@ -71,98 +70,59 @@ function buildRulesTable(rules: RuleRecord[]): string {
 export default function SecurityGroupDetailView({
   securityGroupId,
   securityGroupName,
+  projectName,
   horizonUrl,
   binaryPath,
   configName,
 }: SecurityGroupDetailViewProps) {
-  const [data, setData] = useState<Record<string, unknown> | null>(null);
-  const [rules, setRules] = useState<RuleRecord[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-
-  const cacheKey = `detail:security-group-detail:${securityGroupId}`;
-  const rulesCacheKey = `detail:security-group-rules:${securityGroupId}`;
-
-  const fetchData = useCallback(async () => {
-    try {
-      const [groupResult, rulesResult] = await Promise.all([
-        execFile(binaryPath, ["--os-cloud", configName, "security", "group", "show", securityGroupId, "-f", "json"], {
-          timeout: 30000,
-          maxBuffer: 10 * 1024 * 1024,
-        }),
-        execFile(
-          binaryPath,
-          ["--os-cloud", configName, "security", "group", "rule", "list", securityGroupId, "-f", "json"],
-          { timeout: 30000, maxBuffer: 10 * 1024 * 1024 },
-        ),
-      ]);
-
-      const parsedGroup = JSON.parse(groupResult.stdout) as Record<string, unknown>;
-      const parsedRules = JSON.parse(rulesResult.stdout) as RuleRecord[];
-
-      setData(parsedGroup);
-      setRules(parsedRules);
-      await LocalStorage.setItem(cacheKey, JSON.stringify(parsedGroup));
-      await LocalStorage.setItem(rulesCacheKey, JSON.stringify(parsedRules));
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      await showToast({ style: Toast.Style.Failure, title: "Failed to load security group", message });
-    } finally {
-      setIsLoading(false);
-    }
-  }, [binaryPath, configName, securityGroupId, cacheKey, rulesCacheKey]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      // Load cached data immediately
-      try {
-        const cachedGroup = await LocalStorage.getItem<string>(cacheKey);
-        const cachedRules = await LocalStorage.getItem<string>(rulesCacheKey);
-        if (cachedGroup && !cancelled) {
-          setData(JSON.parse(cachedGroup) as Record<string, unknown>);
-        }
-        if (cachedRules && !cancelled) {
-          setRules(JSON.parse(cachedRules) as RuleRecord[]);
-        }
-      } catch {
-        // Ignore cache read errors
-      }
-
-      // Fetch fresh data
-      if (!cancelled) {
-        await fetchData();
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [cacheKey, rulesCacheKey, fetchData]);
+  const services = getServices(configName, binaryPath);
+  const { data, isLoading, revalidate } = useFetchWithCache<SecurityGroup & Record<string, unknown>>(
+    cacheKey("security-group-detail", configName, securityGroupId),
+    () => services.securityGroups.getSecurityGroup(securityGroupId),
+    { errorTitle: "Failed to load security group" },
+  );
 
   const horizonLink = buildHorizonLink(horizonUrl, "security_groups", securityGroupId);
 
+  const refreshAction = (
+    <Action
+      title="Refresh"
+      icon={Icon.ArrowClockwise}
+      shortcut={{ modifiers: ["cmd"], key: "r" }}
+      onAction={revalidate}
+    />
+  );
+
   if (!data) {
     const markdown = isLoading
-      ? `# ${securityGroupName}\n\nLoading security group details...`
-      : `# ${securityGroupName}\n\nFailed to load security group details.`;
+      ? `# ${escapeMarkdown(securityGroupName)}\n\nLoading security group details...`
+      : `# ${escapeMarkdown(securityGroupName)}\n\nFailed to load security group details.`;
     return (
-      <Detail isLoading={isLoading} navigationTitle={`Security Group: ${securityGroupName}`} markdown={markdown} />
+      <Detail
+        isLoading={isLoading}
+        navigationTitle={`Security Group: ${securityGroupName}`}
+        markdown={markdown}
+        actions={<ActionPanel>{refreshAction}</ActionPanel>}
+      />
     );
   }
 
-  const name = (data["name"] as string) ?? (data["Name"] as string) ?? securityGroupName;
-  const description = (data["description"] as string) ?? (data["Description"] as string) ?? "";
+  const groupNames = new Map(
+    (peekShared<SecurityGroup[]>(cacheKey("security-groups", configName)) ?? []).map((g) => [g.id, g.name]),
+  );
+  const rules = data.security_group_rules ?? [];
+  const markdown =
+    `# ${escapeMarkdown(data.name)}\n\n` +
+    (projectName ? `**Project:** ${escapeMarkdown(projectName)}\n\n` : "") +
+    (data.description ? `> ${escapeMarkdown(data.description)}\n\n` : "") +
+    `## Rules (${rules.length})\n\n${buildRulesTable(rules, groupNames)}`;
 
-  const rulesTable = buildRulesTable(rules);
-  const markdown = `# ${name}\n\n${description ? `> ${description}\n\n` : ""}## Rules\n\n${rulesTable}`;
-
-  const entries = Object.entries(data);
+  const entries = Object.entries(data).filter(([key]) => !HIDDEN_KEYS.has(key));
 
   return (
     <Detail
       isLoading={isLoading}
-      navigationTitle={`Security Group: ${name}`}
+      navigationTitle={`Security Group: ${data.name}`}
       markdown={markdown}
       metadata={
         <Detail.Metadata>
@@ -182,15 +142,7 @@ export default function SecurityGroupDetailView({
               showToast({ style: Toast.Style.Success, title: "Copied ID", message: securityGroupId });
             }}
           />
-          <Action
-            title="Refresh"
-            icon={Icon.ArrowClockwise}
-            shortcut={{ modifiers: ["cmd"], key: "r" }}
-            onAction={async () => {
-              setIsLoading(true);
-              await fetchData();
-            }}
-          />
+          {refreshAction}
           {horizonLink && (
             <Action
               title="Open in Browser"

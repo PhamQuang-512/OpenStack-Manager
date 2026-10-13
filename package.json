@@ -3,7 +3,7 @@
   "name": "openstack-manager",
   "title": "OpenStack Manager",
   "subtitle": "Manage your OpenStack cloud resources",
-  "description": "A Raycast extension for managing OpenStack cloud resources using the openstack CLI. List and manage servers, flavors, images, networks, security groups, and Kubernetes clusters across multiple cloud configurations.",
+  "description": "A Raycast extension for managing OpenStack cloud resources. List and manage servers, load balancers, flavors, images, networks, security groups, and Kubernetes clusters across all projects and multiple cloud configurations.",
   "icon": "extension-icon.png",
   "version": "0.1.0",
   "author": "quang_pham5",
@@ -31,7 +31,7 @@
     {
       "name": "openstackBinaryPath",
       "title": "OpenStack CLI Path",
-      "description": "Path to the openstack CLI executable",
+      "description": "Path to the openstack CLI executable (used to authenticate clouds that do not use application credentials)",
       "type": "textfield",
       "required": true,
       "default": "openstack"

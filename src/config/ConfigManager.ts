@@ -133,12 +133,20 @@ export class ConfigManager {
   /**
    * Writes the clouds.yaml file, creating the directory if needed.
    * Uses lineWidth: -1 to prevent js-yaml from wrapping long lines.
+   * The file holds credential secrets, so it is kept owner-readable only (0600).
    */
   private async writeYaml(data: CloudsYamlFile): Promise<void> {
     const dir = path.dirname(this.yamlPath);
-    await fs.mkdir(dir, { recursive: true });
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
     const content = yaml.dump(data, { lineWidth: -1 });
-    await fs.writeFile(this.yamlPath, content, "utf-8");
+    // `mode` only applies on create: tighten existing files before writing secrets
+    const file = await fs.open(this.yamlPath, "w", 0o600);
+    try {
+      await file.chmod(0o600);
+      await file.writeFile(content, "utf-8");
+    } finally {
+      await file.close();
+    }
   }
 
   /**

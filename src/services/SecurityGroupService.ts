@@ -1,63 +1,29 @@
-import { LocalStorage } from "@raycast/api";
 import { BaseService } from "./BaseService";
 import { SecurityGroup } from "./types";
-import { CLIError } from "../core/errors";
+
+const LIST_FIELDS = ["id", "name", "description", "project_id"];
 
 /**
  * Service for listing OpenStack Neutron security groups.
- * Filters to only show security groups belonging to the current project.
  */
 export class SecurityGroupService extends BaseService {
   /**
-   * Lists security groups scoped to the current project.
+   * Lists security groups in all projects. Rules are excluded from the
+   * list payload (they can be large) and loaded by the detail view.
    */
   async listSecurityGroups(): Promise<SecurityGroup[]> {
-    try {
-      const projectId = await this.getCurrentProjectId();
-
-      if (projectId) {
-        return await this.fetchData<SecurityGroup[]>(["security", "group", "list", "--project", projectId]);
-      }
-
-      return await this.fetchData<SecurityGroup[]>(["security", "group", "list"]);
-    } catch (error) {
-      if (error instanceof CLIError) {
-        this.handleCLIError(error, "Failed to list security groups");
-      }
-      return [];
-    }
+    const fields = LIST_FIELDS.map((f) => `fields=${f}`).join("&");
+    return this.client.listAll<SecurityGroup>("network", `/security-groups?${fields}`, "security_groups");
   }
 
   /**
-   * Fetches detailed information for a single security group.
+   * Fetches a security group including its embedded rules.
    */
-  async getSecurityGroup(id: string): Promise<SecurityGroup> {
-    return this.cli.run<SecurityGroup>(["security", "group", "show", id]);
-  }
-
-  /**
-   * Gets the current project ID by running `openstack token issue`.
-   * Cached in LocalStorage since the project doesn't change within a config.
-   */
-  private async getCurrentProjectId(): Promise<string | null> {
-    const cacheKey = `current-project-id:${this.cli.getCloudName()}`;
-    try {
-      const cached = await LocalStorage.getItem<string>(cacheKey);
-      if (cached) return cached;
-    } catch {
-      // ignore
-    }
-
-    try {
-      const token = await this.cli.run<{ project_id?: string }>(["token", "issue"]);
-      const projectId = token.project_id;
-      if (projectId) {
-        await LocalStorage.setItem(cacheKey, projectId);
-        return projectId;
-      }
-      return null;
-    } catch {
-      return null;
-    }
+  async getSecurityGroup(id: string): Promise<SecurityGroup & Record<string, unknown>> {
+    const body = await this.client.request<{ security_group: SecurityGroup & Record<string, unknown> }>(
+      "network",
+      `/security-groups/${id}`,
+    );
+    return body.security_group;
   }
 }

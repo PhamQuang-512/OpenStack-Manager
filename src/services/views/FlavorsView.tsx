@@ -1,54 +1,40 @@
 import { Action, ActionPanel, Clipboard, Icon, List, showToast, Toast } from "@raycast/api";
-import { useCallback, useMemo, useState } from "react";
-import { CLIExecutor } from "../../core/CLIExecutor";
-import { ResourceCache } from "../../core/ResourceCache";
 import { useFetchWithCache } from "../../core/useFetchWithCache";
-import { FlavorService } from "../FlavorService";
+import { cacheKey, CloudViewProps, getServices } from "../index";
 import { Flavor } from "../types";
-import { ConfigManager } from "../../config/ConfigManager";
-import { filterByName } from "../../utils/searchFilter";
 import FlavorDetailView from "./FlavorDetailView";
 
-interface FlavorsViewProps {
-  configName: string;
-  horizonUrl?: string;
-  binaryPath: string;
-  cache: ResourceCache;
-  configManager: ConfigManager;
-}
-
-export default function FlavorsView({ configName, horizonUrl, binaryPath, cache, configManager }: FlavorsViewProps) {
-  const [searchText, setSearchText] = useState("");
-
-  const cli = useMemo(() => new CLIExecutor(binaryPath, configName), [binaryPath, configName]);
-  const flavorService = useMemo(() => new FlavorService(cli, cache, configManager), [cli, cache, configManager]);
-
-  const fetchFlavors = useCallback(() => flavorService.listFlavors(), [flavorService]);
-  const { data: flavors, isLoading, revalidate } = useFetchWithCache<Flavor[]>(`flavors:${configName}`, fetchFlavors);
-
-  const filtered = filterByName(flavors ?? [], searchText);
+export default function FlavorsView({ configName, horizonUrl, binaryPath }: CloudViewProps) {
+  const services = getServices(configName, binaryPath);
+  const {
+    data: flavors,
+    isLoading,
+    revalidate,
+  } = useFetchWithCache<Flavor[]>(cacheKey("flavors", configName), () => services.flavors.listFlavors(), {
+    errorTitle: "Failed to list flavors",
+  });
 
   return (
     <List
       isLoading={isLoading}
-      searchBarPlaceholder="Search flavors by name..."
-      onSearchTextChange={setSearchText}
+      searchBarPlaceholder="Search flavors by name or ID..."
       navigationTitle={`Flavors — ${configName}`}
     >
       {!isLoading && (flavors ?? []).length === 0 && (
-        <List.EmptyView
-          icon={Icon.MemoryChip}
-          title="No Flavors Found"
-          description="No flavors available in this project."
-        />
+        <List.EmptyView icon={Icon.MemoryChip} title="No Flavors Found" description="No flavors available." />
       )}
-      {filtered.map((flavor) => (
+      {(flavors ?? []).map((flavor) => (
         <List.Item
           key={flavor.id}
           icon={Icon.MemoryChip}
           title={flavor.name ?? flavor.id}
           subtitle={`${flavor.vcpus ?? 0} vCPUs`}
-          accessories={[{ text: `${flavor.ram ?? 0} MB RAM` }, { text: `${flavor.disk ?? 0} GB disk` }]}
+          keywords={[flavor.id]}
+          accessories={[
+            ...(flavor.is_public === false ? [{ tag: "Private" }] : []),
+            { text: `${flavor.ram ?? 0} MB RAM` },
+            { text: `${flavor.disk ?? 0} GB disk` },
+          ]}
           actions={
             <ActionPanel>
               <Action.Push

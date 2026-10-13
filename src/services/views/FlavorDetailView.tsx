@@ -1,11 +1,9 @@
 import GenericDetailView from "./GenericDetailView";
+import { cacheKey, CloudViewProps, getServices } from "../index";
 
-interface FlavorDetailViewProps {
+interface FlavorDetailViewProps extends CloudViewProps {
   flavorId: string;
   flavorName: string;
-  horizonUrl?: string;
-  binaryPath: string;
-  configName: string;
 }
 
 export default function FlavorDetailView({
@@ -15,16 +13,15 @@ export default function FlavorDetailView({
   binaryPath,
   configName,
 }: FlavorDetailViewProps) {
+  const services = getServices(configName, binaryPath);
   return (
     <GenericDetailView
       resourceId={flavorId}
       resourceName={flavorName}
-      cliArgs={["flavor", "show"]}
-      cacheKeyPrefix="flavor-detail"
+      cacheKey={cacheKey("flavor-detail", configName, flavorId)}
+      fetcher={() => services.flavors.getFlavor(flavorId)}
       horizonUrl={horizonUrl}
       horizonResourceType="flavors"
-      binaryPath={binaryPath}
-      configName={configName}
       summaryKeys={[
         { key: "vcpus", label: "vCPUs" },
         { key: "ram", label: "RAM (MB)" },

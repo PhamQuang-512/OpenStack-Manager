@@ -1,60 +1,52 @@
 import { Action, ActionPanel, Clipboard, Icon, List, showToast, Toast } from "@raycast/api";
-import { useCallback, useMemo, useState } from "react";
-import { CLIExecutor } from "../../core/CLIExecutor";
-import { ResourceCache } from "../../core/ResourceCache";
 import { useFetchWithCache } from "../../core/useFetchWithCache";
-import { ImageService } from "../ImageService";
+import { cacheKey, CloudViewProps, getServices } from "../index";
 import { Image } from "../types";
-import { ConfigManager } from "../../config/ConfigManager";
 import { getImageStatusColor } from "../../utils/statusColors";
-import { filterByName } from "../../utils/searchFilter";
 import ImageDetailView from "./ImageDetailView";
+import { projectAccessory, useProjectFilter } from "./projectFilter";
 
-interface ImagesViewProps {
-  configName: string;
-  horizonUrl?: string;
-  binaryPath: string;
-  cache: ResourceCache;
-  configManager: ConfigManager;
-}
+export default function ImagesView({ configName, horizonUrl, binaryPath }: CloudViewProps) {
+  const services = getServices(configName, binaryPath);
+  const {
+    data: images,
+    isLoading,
+    revalidate,
+  } = useFetchWithCache<Image[]>(cacheKey("images", configName), () => services.images.listImages(), {
+    errorTitle: "Failed to list images",
+  });
 
-export default function ImagesView({ configName, horizonUrl, binaryPath, cache, configManager }: ImagesViewProps) {
-  const [searchText, setSearchText] = useState("");
-
-  const cli = useMemo(() => new CLIExecutor(binaryPath, configName), [binaryPath, configName]);
-  const imageService = useMemo(() => new ImageService(cli, cache, configManager), [cli, cache, configManager]);
-
-  const fetchImages = useCallback(() => imageService.listImages(), [imageService]);
-  const { data: images, isLoading, revalidate } = useFetchWithCache<Image[]>(`images:${configName}`, fetchImages);
-
-  const filtered = filterByName(images ?? [], searchText);
+  const { filtered, dropdown, projectName } = useProjectFilter(configName, binaryPath, images, (i) => i.owner);
 
   return (
     <List
       isLoading={isLoading}
-      searchBarPlaceholder="Search images by name..."
-      onSearchTextChange={setSearchText}
+      searchBarPlaceholder="Search images by name, ID or project..."
+      searchBarAccessory={dropdown}
       navigationTitle={`Images — ${configName}`}
     >
-      {!isLoading && (images ?? []).length === 0 && (
+      {!isLoading && filtered.length === 0 && (
         <List.EmptyView
           icon={Icon.Document}
           title="No Images Found"
-          description="No images available in this project."
+          description="No images in the selected projects."
         />
       )}
       {filtered.map((image) => {
         const sizeDisplay = image.size != null && image.size > 0 ? `${(image.size / 1024 / 1024).toFixed(1)} MB` : "";
+        const project = projectName(image.owner);
         return (
           <List.Item
             key={image.id}
             icon={Icon.Document}
-            title={image.name}
+            title={image.name ?? image.id}
             subtitle={image.disk_format ?? ""}
+            keywords={[image.id, project].filter(Boolean)}
             accessories={[
-              { tag: { value: image.status ?? "unknown", color: getImageStatusColor(image.status ?? "") } },
+              ...projectAccessory(project),
               ...(sizeDisplay ? [{ text: sizeDisplay }] : []),
               ...(image.visibility ? [{ text: image.visibility }] : []),
+              { tag: { value: image.status ?? "unknown", color: getImageStatusColor(image.status ?? "") } },
             ]}
             actions={
               <ActionPanel>
@@ -64,7 +56,8 @@ export default function ImagesView({ configName, horizonUrl, binaryPath, cache, 
                   target={
                     <ImageDetailView
                       imageId={image.id}
-                      imageName={image.name}
+                      imageName={image.name ?? image.id}
+                      projectName={project}
                       horizonUrl={horizonUrl}
                       binaryPath={binaryPath}
                       configName={configName}

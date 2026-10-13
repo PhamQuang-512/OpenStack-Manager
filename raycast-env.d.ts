@@ -8,7 +8,7 @@
 /* eslint-disable @typescript-eslint/ban-types */
 
 type ExtensionPreferences = {
-  /** OpenStack CLI Path - Path to the openstack CLI executable */
+  /** OpenStack CLI Path - Path to the openstack CLI executable (used to authenticate clouds that do not use application credentials) */
   "openstackBinaryPath": string
 }
 
